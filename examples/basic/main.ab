@@ -1,0 +1,21 @@
+import "../../src/abla-web.ab"
+import "abla/http/event"
+
+fun hello(context: WebContext): HttpResponse = webJson(
+    "{\"message\":\"hello ${context.parameter("name")}\"}"
+)
+
+fun exampleReady(): WebHealthResult = webHealthy("example ready")
+
+fun main: int {
+    val app = webApp()
+    app.use(webSecurityHeaders())
+    app.use(webCors(webCorsOptions("https://example.com")))
+    app.group("/api").get("/hello/:name", hello)
+    val checks = webHealthRegistry()
+    checks.add("example", exampleReady)
+    app.group("/health").health(checks)
+    val handleRequest = { request: HttpRequest -> webDispatch(app, request) }
+    val server = httpEventServerHandler(handleRequest, ipv4Any(8080))
+    server.run()
+}

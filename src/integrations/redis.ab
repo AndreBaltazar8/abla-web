@@ -1,0 +1,65 @@
+import github("AndreBaltazar8/abla-redis") as redis
+import "../middleware.ab"
+import "../health.ab"
+
+class WebRedisStore(val client: redis.RedisClient)
+
+class WebRedisLimitResult(
+    val allowed: bool,
+    val available: bool,
+    val retryAfterSeconds: int
+)
+
+fun webRedisStore(config: redis.RedisConfig): WebRedisStore {
+    var client = redis.redisClient(config)
+    WebRedisStore(move(client))
+}
+
+fun WebRedisStore.health(): WebHealthResult {
+    val result = this.client.ping()
+    if (result.succeeded()) webHealthy("connected")
+    else webUnhealthy(result.error)
+}
+
+fun WebRedisStore.close(): void {
+    this.client.close()
+    return
+}
+
+fun WebRedisStore.allow(
+    key: string,
+    maximum: int,
+    windowSeconds: int
+): WebRedisLimitResult {
+    val count = this.client.increment("abla-web:rate:$key")
+    if (count.succeeded() && count.asInt() == 1) {
+        this.client.expire("abla-web:rate:$key", windowSeconds)
+    }
+    WebRedisLimitResult(
+        count.succeeded() && count.asInt() <= maximum,
+        count.succeeded(),
+        windowSeconds
+    )
+}
+
+fun webRedisRateLimit(
+    allow: (WebContext) -> WebRedisLimitResult,
+    allowOnError: bool = false
+): WebMiddleware = webMiddleware(
+    "redis-rate-limit",
+    { context: WebContext, next: WebNext ->
+        val check = allow
+        val result = check(context)
+        if (result.allowed || (!result.available && allowOnError)) {
+            next.run(context)
+        } else if (!result.available) webError(
+            "rate_limit_unavailable",
+            "The rate limiter is temporarily unavailable.",
+            503
+        ) else webResponseHeader(
+            webError("rate_limited", "Too many requests.", 429),
+            "Retry-After",
+            "${result.retryAfterSeconds}"
+        )
+    }
+)

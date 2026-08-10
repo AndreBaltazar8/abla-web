@@ -1,0 +1,3 @@
+name = "abla-web"
+version = "0.1.0"
+entry = "src/abla-web.ab"

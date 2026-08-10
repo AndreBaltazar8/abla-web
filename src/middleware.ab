@@ -1,0 +1,246 @@
+import "core.ab"
+
+class WebCorsOptions(
+    val allowOrigin: string,
+    val allowMethods: string,
+    val allowHeaders: string,
+    val allowCredentials: bool,
+    val maximumAgeSeconds: int
+)
+
+class WebAuthResult(
+    val accepted: bool,
+    val principal: string,
+    val detail: string
+)
+
+class WebSessionResult(
+    val accepted: bool,
+    val sessionId: string,
+    val principal: string
+)
+
+class WebAccessRecord(
+    val method: string,
+    val path: string,
+    val status: int,
+    val requestId: string,
+    val principal: string
+)
+
+fun webCorsOptions(
+    allowOrigin: string,
+    allowMethods: string = "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    allowHeaders: string = "Authorization, Content-Type",
+    allowCredentials: bool = false,
+    maximumAgeSeconds: int = 600
+): WebCorsOptions = WebCorsOptions(
+    allowOrigin,
+    allowMethods,
+    allowHeaders,
+    allowCredentials,
+    maximumAgeSeconds
+)
+
+fun webCors(options: WebCorsOptions): WebMiddleware = webMiddleware(
+    "cors",
+    { context: WebContext, next: WebNext ->
+        var response = if (context.request.method == "OPTIONS") {
+            HttpResponse(204, [], "")
+        } else next.run(context)
+        response = webResponseHeader(
+            response, "Access-Control-Allow-Origin", options.allowOrigin
+        )
+        response = webResponseHeader(
+            response, "Access-Control-Allow-Methods", options.allowMethods
+        )
+        response = webResponseHeader(
+            response, "Access-Control-Allow-Headers", options.allowHeaders
+        )
+        response = webResponseHeader(
+            response,
+            "Access-Control-Max-Age",
+            "${options.maximumAgeSeconds}"
+        )
+        if (options.allowCredentials) response = webResponseHeader(
+            response, "Access-Control-Allow-Credentials", "true"
+        )
+        response
+    }
+)
+
+fun webSecurityHeaders(): WebMiddleware = webMiddleware(
+    "security-headers",
+    { context: WebContext, next: WebNext ->
+        var response = next.run(context)
+        response = webResponseHeader(response, "X-Content-Type-Options", "nosniff")
+        response = webResponseHeader(response, "X-Frame-Options", "DENY")
+        response = webResponseHeader(
+            response, "Referrer-Policy", "strict-origin-when-cross-origin"
+        )
+        response = webResponseHeader(
+            response, "Cross-Origin-Resource-Policy", "same-origin"
+        )
+        response
+    }
+)
+
+fun webBodyLimit(maximumBytes: int): WebMiddleware = webMiddleware(
+    "body-limit",
+    { context: WebContext, next: WebNext ->
+        if (context.request.body.size > maximumBytes) {
+            webError(
+                "payload_too_large",
+                "The request body exceeds the configured limit.",
+                413
+            )
+        } else next.run(context)
+    }
+)
+
+fun webBearerToken(value: string): string {
+    var token = ""
+    if (value.size > 7 && value.slice(0, 7) == "Bearer ") {
+        token = value.slice(7, value.size)
+    }
+    token
+}
+
+fun webBearerAuth(
+    authenticate: (string) -> WebAuthResult
+): WebMiddleware = webMiddleware(
+    "bearer-auth",
+    { context: WebContext, next: WebNext ->
+        val token = webBearerToken(context.header("Authorization"))
+        val resolve = authenticate
+        val result = resolve(token)
+        if (!result.accepted) {
+            webResponseHeader(
+                webError("unauthorized", result.detail, 401),
+                "WWW-Authenticate",
+                "Bearer"
+            )
+        } else {
+            next.run(context.withState("principal", result.principal))
+        }
+    }
+)
+
+fun webCookie(header: string, name: string): string {
+    var result = ""
+    var begin = 0
+    var index = 0
+    while (result == "" && index <= header.size) {
+        if (index == header.size || header[index] == 59) {
+            var left = begin
+            while (left < index && header[left] == 32) left = left + 1
+            var equals = left
+            while (equals < index && header[equals] != 61) equals = equals + 1
+            if (equals < index && header.slice(left, equals) == name) {
+                result = header.slice(equals + 1, index)
+            }
+            begin = index + 1
+        }
+        index = index + 1
+    }
+    result
+}
+
+fun webCookieHeader(
+    name: string,
+    value: string,
+    maximumAgeSeconds: int = 2592000,
+    secure: bool = true,
+    sameSite: string = "Lax"
+): string {
+    var output = "$name=$value; Path=/; HttpOnly; SameSite=$sameSite; Max-Age=$maximumAgeSeconds"
+    if (secure) output = "$output; Secure"
+    output
+}
+
+fun webRateLimit(
+    allow: (WebContext) -> bool
+): WebMiddleware = webMiddleware(
+    "rate-limit",
+    { context: WebContext, next: WebNext ->
+        val check = allow
+        if (check(context)) next.run(context)
+        else webResponseHeader(
+            webError(
+                "rate_limited",
+                "Too many requests; retry shortly.",
+                429
+            ),
+            "Retry-After",
+            "1"
+        )
+    }
+)
+
+fun webSession(
+    cookieName: string,
+    load: (string) -> WebSessionResult,
+    required: bool = false
+): WebMiddleware = webMiddleware(
+    "session",
+    { context: WebContext, next: WebNext ->
+        val sessionId = webCookie(context.header("Cookie"), cookieName)
+        val resolve = load
+        val session = resolve(sessionId)
+        if (required && !session.accepted) {
+            webError("session_required", "A valid session is required.", 401)
+        } else if (session.accepted) {
+            next.run(
+                context.withState("session", session.sessionId).withState(
+                    "principal", session.principal
+                )
+            )
+        } else next.run(context)
+    }
+)
+
+fun webCsrf(
+    validate: (WebContext) -> bool
+): WebMiddleware = webMiddleware(
+    "csrf",
+    { context: WebContext, next: WebNext ->
+        val safe = context.request.method == "GET" ||
+            context.request.method == "HEAD" ||
+            context.request.method == "OPTIONS"
+        val check = validate
+        if (safe || check(context)) next.run(context)
+        else webError("csrf_rejected", "The CSRF token is invalid.", 403)
+    }
+)
+
+fun webRequestIdentity(
+    generate: (HttpRequest) -> string
+): WebMiddleware = webMiddleware(
+    "request-identity",
+    { context: WebContext, next: WebNext ->
+        val create = generate
+        val requestId = create(context.request)
+        webResponseHeader(
+            next.run(context.withState("requestId", requestId)),
+            "X-Request-Id",
+            requestId
+        )
+    }
+)
+
+fun webAccessLog(
+    record: (WebAccessRecord) -> void
+): WebMiddleware = webMiddleware(
+    "access-log",
+    { context: WebContext, next: WebNext ->
+        val response = next.run(context)
+        record(WebAccessRecord(
+            context.request.method,
+            context.request.path,
+            response.status,
+            context.state("requestId"),
+            context.state("principal")
+        ))
+        response
+    }
+)

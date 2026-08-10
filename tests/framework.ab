@@ -1,0 +1,122 @@
+import "../src/abla-web.ab"
+
+fun traceGlobal(context: WebContext, next: WebNext): HttpResponse {
+    webResponseHeader(next.run(context), "X-Global", "yes")
+}
+
+fun traceGroup(context: WebContext, next: WebNext): HttpResponse {
+    webResponseHeader(next.run(context), "X-Group", "yes")
+}
+
+fun acceptedToken(token: string): WebAuthResult = WebAuthResult(
+    token == "good", "user-7", "bad token"
+)
+
+fun requestIdentity(request: HttpRequest): string =
+    "request-${request.path.size}"
+
+fun recordAccess(record: WebAccessRecord): void {
+    return
+}
+
+fun loadSession(sessionId: string): WebSessionResult = WebSessionResult(
+    sessionId == "session-good",
+    sessionId,
+    "session-user"
+)
+
+fun csrfValid(context: WebContext): bool =
+    context.header("X-CSRF-Token") == "csrf-good"
+
+fun databaseReady(): WebHealthResult = webHealthy("connected")
+
+fun observeMetric(metric: WebRequestMetric): void {
+    return
+}
+
+fun account(context: WebContext): HttpResponse = httpText(
+    "${context.parameter("id")}:${context.state("principal")}"
+)
+
+fun sessionAccount(context: WebContext): HttpResponse = httpText(
+    "${context.state("session")}:${context.state("principal")}"
+)
+
+fun rpcEcho(payload: string): string = "{\"ok\":true,\"echo\":$payload}"
+
+fun main: int {
+    val app = webApp()
+    app.use(webMiddleware("trace-global", traceGlobal))
+    app.use(webRequestIdentity(requestIdentity))
+    app.use(webRequestMetrics(observeMetric))
+    app.use(webAccessLog(recordAccess))
+    app.use(webSecurityHeaders())
+    app.use(webCors(webCorsOptions("https://mobile.example")))
+    val api = app.group("/api/v1")
+    api.use(webMiddleware("trace-group", traceGroup))
+    api.use(webBearerAuth(acceptedToken))
+    api.get("/accounts/:id", account)
+    api.put("/accounts/:id", account)
+    val rpc = webRpcRouter()
+    rpc.method("echo", rpcEcho)
+    api.rpc("/rpc", rpc)
+    val sessions = app.group("/session")
+    sessions.use(webSession("abla_session", loadSession, true))
+    sessions.use(webCsrf(csrfValid))
+    sessions.post("/account", sessionAccount)
+    val health = webHealthRegistry()
+    health.add("database", databaseReady)
+    app.group("/health").health(health)
+
+    val authorized = app.dispatch(httpGet("/api/v1/accounts/42", [
+        HttpHeader("Authorization", "Bearer good")
+    ]))
+    val unauthorized = app.dispatch(httpGet("/api/v1/accounts/42"))
+    val called = app.dispatch(httpPost(
+        "/api/v1/rpc/echo",
+        "7",
+        [HttpHeader("Authorization", "Bearer good")]
+    ))
+    val missing = app.dispatch(httpGet("/missing"))
+    val wrongMethod = app.dispatch(httpPost("/api/v1/accounts/42", ""))
+    val preflight = app.dispatch(httpRequest(
+        "OPTIONS", "/api/v1/accounts/42"
+    ))
+    val updated = app.dispatch(httpRequest(
+        "PUT",
+        "/api/v1/accounts/9",
+        "",
+        [HttpHeader("Authorization", "Bearer good")]
+    ))
+    val session = app.dispatch(httpPost(
+        "/session/account",
+        "",
+        [HttpHeader("Cookie", "abla_session=session-good"),
+         HttpHeader("X-CSRF-Token", "csrf-good")]
+    ))
+    val csrfRejected = app.dispatch(httpPost(
+        "/session/account",
+        "",
+        [HttpHeader("Cookie", "abla_session=session-good")]
+    ))
+    val ready = app.dispatch(httpGet("/health/ready"))
+
+    if (authorized.status == 200 && authorized.body == "42:user-7" &&
+        authorized.header("X-Global") == "yes" &&
+        authorized.header("X-Group") == "yes" &&
+        authorized.header("X-Content-Type-Options") == "nosniff" &&
+        unauthorized.status == 401 &&
+        unauthorized.header("WWW-Authenticate") == "Bearer" &&
+        called.status == 200 &&
+        called.body == "{\"ok\":true,\"echo\":7}" &&
+        missing.status == 404 && wrongMethod.status == 405 &&
+        preflight.status == 204 &&
+        preflight.header("Access-Control-Allow-Origin") ==
+            "https://mobile.example" &&
+        updated.status == 200 && updated.body == "9:user-7" &&
+        session.status == 200 &&
+        session.body == "session-good:session-user" &&
+        ready.status == 200 && ready.body != "" &&
+        csrfRejected.status == 403 &&
+        csrfRejected.header("X-Request-Id") == "request-16") 42 else 1
+}

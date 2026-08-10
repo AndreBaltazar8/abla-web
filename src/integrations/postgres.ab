@@ -1,0 +1,64 @@
+import github("AndreBaltazar8/abla-postgres") as postgres
+import "../health.ab"
+
+class WebPostgresPool(
+    val config: postgres.PgConfig,
+    val descriptors: array<int>,
+    val buffers: array<string>,
+    var next: int
+)
+
+fun webPostgresPool(
+    config: postgres.PgConfig,
+    size: int = 4
+): WebPostgresPool {
+    val descriptors: array<int> = []
+    val buffers: array<string> = []
+    var index = 0
+    var bounded = size
+    if (bounded < 1) bounded = 1
+    if (bounded > 64) bounded = 64
+    while (index < bounded) {
+        descriptors.append(-1)
+        buffers.append("")
+        index = index + 1
+    }
+    WebPostgresPool(config, descriptors, buffers, 0)
+}
+
+fun WebPostgresPool.query(
+    sql: string,
+    parameters: array<postgres.PgParameter> = []
+): postgres.PgResult {
+    val slot = this.next
+    this.next = this.next + 1
+    if (this.next >= this.descriptors.size) this.next = 0
+    val session = postgres.pgSessionQuery(
+        this.config,
+        this.descriptors[slot],
+        this.buffers[slot],
+        sql,
+        parameters
+    )
+    this.descriptors[slot] = session.descriptor
+    this.buffers[slot] = session.buffered
+    session.result
+}
+
+fun WebPostgresPool.migrate(statements: array<string>): string {
+    var error = ""
+    var index = 0
+    while (error == "" && index < statements.size) {
+        val result = this.query(statements[index])
+        if (!result.succeeded) error = result.error
+        index = index + 1
+    }
+    error
+}
+
+fun WebPostgresPool.health(): WebHealthResult {
+    val result = this.query("SELECT 1::text AS ready")
+    if (result.succeeded && result.first("ready") == "1") {
+        webHealthy("connected")
+    } else webUnhealthy(result.error)
+}

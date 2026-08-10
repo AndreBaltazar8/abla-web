@@ -1,0 +1,47 @@
+import "core.ab"
+
+class WebRpcMethod(
+    val name: string,
+    val invoke: (string) -> string
+)
+
+class WebRpcRouter(val methods: array<WebRpcMethod>)
+
+fun webRpcRouter(): WebRpcRouter = WebRpcRouter([])
+
+fun WebRpcRouter.method(
+    name: string,
+    handler: (string) -> string
+): WebRpcRouter {
+    this.methods.append(WebRpcMethod(name, handler))
+    this
+}
+
+fun WebRpcRouter.dispatch(name: string, payload: string): HttpResponse {
+    var selected = -1
+    var index = 0
+    while (selected < 0 && index < this.methods.size) {
+        if (this.methods[index].name == name) selected = index
+        index = index + 1
+    }
+    if (selected < 0) webJson(
+        "{\"ok\":false,\"code\":\"rpc_method_not_found\"}",
+        404
+    ) else {
+        val invoke = this.methods[selected].invoke
+        webJson(invoke(payload))
+    }
+}
+
+fun WebRouteGroup.rpc(
+    path: string,
+    router: WebRpcRouter
+): WebRouteGroup {
+    val rpcRouter = router
+    this.post(
+        webJoinPath(path, ":method"),
+        { context: WebContext -> rpcRouter.dispatch(
+            context.parameter("method"), context.request.body
+        ) }
+    )
+}

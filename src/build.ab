@@ -1,0 +1,43 @@
+// Compile-time service generator for existing @rpc (string) -> string actions.
+
+import "abla/compiler"
+
+compile fun webRpcServerSource(
+    backendImport: string,
+    backendAlias: string,
+    frameworkImport: string,
+    port: int
+): string {
+    val functions = compiler.functionsAnnotated("rpc")
+    var source = "import \"abla/http/event\"\nimport \"$frameworkImport\"\nimport \"$backendImport\" as $backendAlias\n\n"
+    var routes = ""
+    var index = 0
+    while (index < functions.size) {
+        val function = functions[index]
+        if (compiler.parameterCount(function) == 1 &&
+            compiler.parameterType(function, 0) == "string" &&
+            compiler.resultType(function) == "string") {
+            val name = compiler.functionName(function)
+            source = "$source\nfun ablaWebRpcHandle${index}(context: WebContext): HttpResponse =\n    webJson($backendAlias.$name(context.request.body))\n"
+            routes = "$routes    api.post(\"/rpc/$name\", ablaWebRpcHandle${index})\n"
+        }
+        index = index + 1
+    }
+    "$source\nfun ablaWebHealth(context: WebContext): HttpResponse =\n    webJson(\"{\\\"ok\\\":true,\\\"status\\\":\\\"ready\\\"}\")\n\nfun main: int {\n    val app = webApp()\n    app.use(webSecurityHeaders())\n    app.use(webBodyLimit(1048576))\n    app.get(\"/health\", ablaWebHealth)\n    val api = app.group(\"\")\n$routes    val handleRequest = { request: HttpRequest -> webDispatch(app, request) }\n    val server = httpEventServerHandler(handleRequest, ipv4Any($port))\n    server.run()\n}\n"
+}
+
+compile fun webWriteRpcServer(
+    output: string,
+    backendImport: string,
+    backendAlias: string,
+    frameworkImport: string,
+    port: int
+): bool = compiler.writeFile(
+    output,
+    webRpcServerSource(
+        backendImport,
+        backendAlias,
+        frameworkImport,
+        port
+    )
+)

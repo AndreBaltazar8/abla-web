@@ -1,0 +1,31 @@
+import github("AndreBaltazar8/abla-nats") as nats
+import "../health.ab"
+
+class WebNatsJobs(val client: nats.NatsClient, val prefix: string)
+
+fun webNatsJobs(
+    config: nats.NatsConfig,
+    prefix: string = "jobs"
+): WebNatsJobs {
+    var client = nats.natsClient(config)
+    WebNatsJobs(move(client), prefix)
+}
+
+fun WebNatsJobs.publish(name: string, payload: string): bool {
+    val result = this.client.publish("${this.prefix}.$name", payload)
+    result.succeeded()
+}
+
+fun WebNatsJobs.request(name: string, payload: string): nats.NatsMessage =
+    this.client.request("${this.prefix}.$name", payload)
+
+fun WebNatsJobs.health(): WebHealthResult {
+    val result = this.client.flush()
+    if (result.succeeded()) webHealthy("connected")
+    else webUnhealthy(result.error)
+}
+
+fun WebNatsJobs.close(): void {
+    this.client.close()
+    return
+}

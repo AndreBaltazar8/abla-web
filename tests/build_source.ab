@@ -1,0 +1,27 @@
+import "../src/build.ab"
+
+@rpc
+fun generatedEcho(payload: string): string = payload
+
+fun contains(input: string, wanted: string): bool {
+    var found = false
+    var index = 0
+    while (!found && index + wanted.size <= input.size) {
+        if (input.slice(index, index + wanted.size) == wanted) found = true
+        index = index + 1
+    }
+    found
+}
+
+val generated = #webRpcServerSource(
+    "backend.ab",
+    "backend",
+    "../src/abla-web.ab",
+    9090
+)
+
+fun main: int = if (
+    contains(generated, "api.post(\"/rpc/generatedEcho\"") &&
+    contains(generated, "httpEventServerHandler") &&
+    contains(generated, "ipv4Any(9090)")
+) 42 else 1

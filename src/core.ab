@@ -1,0 +1,351 @@
+import "abla/http"
+import "abla/json"
+
+class WebContext(
+    val request: HttpRequest,
+    val stateNames: array<string>,
+    val stateValues: array<string>
+)
+
+fun WebContext.state(name: string): string {
+    var result = ""
+    var index = 0
+    while (index < this.stateNames.size) {
+        if (this.stateNames[index] == name) result = this.stateValues[index]
+        index = index + 1
+    }
+    result
+}
+
+fun WebContext.withState(name: string, value: string): WebContext {
+    val names: array<string> = []
+    val values: array<string> = []
+    var found = -1
+    var index = 0
+    while (found < 0 && index < this.stateNames.size) {
+        if (this.stateNames[index] == name) found = index
+        index = index + 1
+    }
+    index = 0
+    while (index < this.stateNames.size) {
+        names.append(this.stateNames[index])
+        if (index == found) values.append(value)
+        else values.append(this.stateValues[index])
+        index = index + 1
+    }
+    if (found < 0) {
+        names.append(name)
+        values.append(value)
+    }
+    WebContext(this.request, names, values)
+}
+
+fun WebContext.parameter(name: string): string =
+    this.request.parameter(name)
+
+fun WebContext.header(name: string): string = this.request.header(name)
+
+class WebNext(val invoke: (WebContext) -> HttpResponse)
+
+fun WebNext.run(context: WebContext): HttpResponse {
+    val callback = this.invoke
+    callback(context)
+}
+
+class WebMiddleware(
+    val name: string,
+    val handle: (WebContext, WebNext) -> HttpResponse
+)
+
+class WebRoute(
+    val method: string,
+    val pattern: string,
+    val middleware: array<WebMiddleware>,
+    val handler: (WebContext) -> HttpResponse
+)
+
+class WebApp(
+    val middleware: array<WebMiddleware>,
+    val routes: array<WebRoute>
+)
+
+class WebRouteGroup(
+    val app: WebApp,
+    val prefix: string,
+    val middleware: array<WebMiddleware>
+)
+
+fun webApp(): WebApp = WebApp([], [])
+
+fun webMiddleware(
+    name: string,
+    handler: (WebContext, WebNext) -> HttpResponse
+): WebMiddleware = WebMiddleware(name, handler)
+
+fun WebApp.use(middleware: WebMiddleware): WebApp {
+    this.middleware.append(middleware)
+    this
+}
+
+fun webNormalizePrefix(prefix: string): string {
+    var normalized = prefix
+    if (normalized == "/") normalized = ""
+    if (normalized.size > 0 && normalized[0] != 47) {
+        normalized = "/$normalized"
+    }
+    while (normalized.size > 1 &&
+        normalized[normalized.size - 1] == 47) {
+        normalized = normalized.slice(0, normalized.size - 1)
+    }
+    normalized
+}
+
+fun webJoinPath(prefix: string, path: string): string {
+    val normalized = webNormalizePrefix(prefix)
+    var suffix = path
+    if (suffix == "") suffix = "/"
+    if (suffix[0] != 47) suffix = "/$suffix"
+    if (normalized == "") suffix else "$normalized$suffix"
+}
+
+fun WebApp.group(prefix: string): WebRouteGroup =
+    WebRouteGroup(this, webNormalizePrefix(prefix), [])
+
+fun WebRouteGroup.group(prefix: string): WebRouteGroup {
+    val inherited: array<WebMiddleware> = []
+    var index = 0
+    while (index < this.middleware.size) {
+        inherited.append(this.middleware[index])
+        index = index + 1
+    }
+    WebRouteGroup(
+        this.app,
+        webJoinPath(this.prefix, prefix),
+        inherited
+    )
+}
+
+fun WebRouteGroup.use(middleware: WebMiddleware): WebRouteGroup {
+    this.middleware.append(middleware)
+    this
+}
+
+fun WebApp.route(
+    method: string,
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp {
+    this.routes.append(WebRoute(method, webJoinPath("", pattern), [], handler))
+    this
+}
+
+fun WebRouteGroup.route(
+    method: string,
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup {
+    val routeMiddleware: array<WebMiddleware> = []
+    var index = 0
+    while (index < this.middleware.size) {
+        routeMiddleware.append(this.middleware[index])
+        index = index + 1
+    }
+    this.app.routes.append(WebRoute(
+        method,
+        webJoinPath(this.prefix, pattern),
+        routeMiddleware,
+        handler
+    ))
+    this
+}
+
+fun WebApp.get(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("GET", pattern, handler)
+
+fun WebApp.post(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("POST", pattern, handler)
+
+fun WebApp.put(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("PUT", pattern, handler)
+
+fun WebApp.patch(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("PATCH", pattern, handler)
+
+fun WebApp.delete(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("DELETE", pattern, handler)
+
+fun WebApp.options(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("OPTIONS", pattern, handler)
+
+fun WebApp.head(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebApp = this.route("HEAD", pattern, handler)
+
+fun WebRouteGroup.get(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("GET", pattern, handler)
+
+fun WebRouteGroup.post(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("POST", pattern, handler)
+
+fun WebRouteGroup.put(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("PUT", pattern, handler)
+
+fun WebRouteGroup.patch(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("PATCH", pattern, handler)
+
+fun WebRouteGroup.delete(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("DELETE", pattern, handler)
+
+fun WebRouteGroup.options(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("OPTIONS", pattern, handler)
+
+fun WebRouteGroup.head(
+    pattern: string,
+    handler: (WebContext) -> HttpResponse
+): WebRouteGroup = this.route("HEAD", pattern, handler)
+
+fun webInvokeMiddleware(
+    middleware: array<WebMiddleware>,
+    index: int,
+    context: WebContext,
+    handler: (WebContext) -> HttpResponse
+): HttpResponse {
+    if (index >= middleware.size) {
+        val terminal = handler
+        terminal(context)
+    } else {
+        val current = middleware[index].handle
+        val next = WebNext({ nextContext: WebContext ->
+            webInvokeMiddleware(
+                middleware,
+                index + 1,
+                nextContext,
+                handler
+            )
+        })
+        current(context, next)
+    }
+}
+
+fun WebApp.dispatch(request: HttpRequest): HttpResponse {
+    var selected = -1
+    var selectedMatch = HttpPathMatch(false, [], [])
+    var pathMatched = false
+    var exactMethod = false
+    var index = 0
+    while (index < this.routes.size && selected < 0) {
+        val route = this.routes[index]
+        val matched = httpMatchPath(route.pattern, request.path)
+        if (matched.matched) {
+            pathMatched = true
+            val exact = route.method == request.method
+            val headFallback = request.method == "HEAD" && route.method == "GET"
+            if (exact || headFallback) {
+                selected = index
+                selectedMatch = matched
+                exactMethod = exact
+            }
+        }
+        index = index + 1
+    }
+    var routed = request
+    if (selected >= 0) {
+        routed = HttpRequest(
+            request.method,
+            request.path,
+            request.query,
+            request.headers,
+            request.body,
+            selectedMatch.names,
+            selectedMatch.values
+        )
+    }
+    val context = WebContext(routed, [], [])
+    val chain: array<WebMiddleware> = []
+    index = 0
+    while (index < this.middleware.size) {
+        chain.append(this.middleware[index])
+        index = index + 1
+    }
+    if (selected >= 0) {
+        val route = this.routes[selected]
+        index = 0
+        while (index < route.middleware.size) {
+            chain.append(route.middleware[index])
+            index = index + 1
+        }
+    }
+    val terminal = { terminalContext: WebContext ->
+        if (selected < 0) {
+            if (pathMatched) httpText("method not allowed", 405)
+            else httpText("not found", 404)
+        } else {
+            val handler = this.routes[selected].handler
+            handler(terminalContext)
+        }
+    }
+    val response = webInvokeMiddleware(chain, 0, context, terminal)
+    if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
+        HttpResponse(response.status, response.headers, "")
+    } else response
+}
+
+fun webDispatch(app: WebApp, request: HttpRequest): HttpResponse =
+    app.dispatch(request)
+
+fun webResponseHeader(
+    response: HttpResponse,
+    name: string,
+    value: string
+): HttpResponse {
+    val headers: array<HttpHeader> = []
+    var index = 0
+    while (index < response.headers.size) {
+        if (!httpAsciiEqualInsensitive(response.headers[index].name, name)) {
+            headers.append(response.headers[index])
+        }
+        index = index + 1
+    }
+    headers.append(HttpHeader(name, value))
+    HttpResponse(response.status, headers, response.body)
+}
+
+fun webJson(body: string, status: int = 200): HttpResponse = HttpResponse(
+    status,
+    [HttpHeader("Content-Type", "application/json; charset=utf-8")],
+    body
+)
+
+fun webError(
+    code: string,
+    message: string,
+    status: int
+): HttpResponse = webJson(jsonStringify(jsonObject(
+    ["ok", "code", "message"],
+    [jsonBoolean(false), jsonString(code), jsonString(message)]
+)), status)

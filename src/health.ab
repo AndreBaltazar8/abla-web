@@ -1,0 +1,62 @@
+import "core.ab"
+
+class WebHealthResult(val healthy: bool, val detail: string)
+
+class WebHealthCheck(
+    val name: string,
+    val check: () -> WebHealthResult
+)
+
+class WebHealthRegistry(val checks: array<WebHealthCheck>)
+
+fun webHealthy(detail: string = "ok"): WebHealthResult =
+    WebHealthResult(true, detail)
+
+fun webUnhealthy(detail: string): WebHealthResult =
+    WebHealthResult(false, detail)
+
+fun webHealthRegistry(): WebHealthRegistry = WebHealthRegistry([])
+
+fun WebHealthRegistry.add(
+    name: string,
+    check: () -> WebHealthResult
+): WebHealthRegistry {
+    this.checks.append(WebHealthCheck(name, check))
+    this
+}
+
+fun WebHealthRegistry.live(context: WebContext): HttpResponse =
+    webJson("{\"ok\":true,\"status\":\"live\"}")
+
+fun WebHealthRegistry.ready(context: WebContext): HttpResponse {
+    val names: array<string> = []
+    val states: array<Json> = []
+    var healthy = true
+    var index = 0
+    while (index < this.checks.size) {
+        val probe = this.checks[index].check
+        val result = probe()
+        if (!result.healthy) healthy = false
+        names.append(this.checks[index].name)
+        states.append(jsonObject(
+            ["healthy", "detail"],
+            [jsonBoolean(result.healthy), jsonString(result.detail)]
+        ))
+        index = index + 1
+    }
+    webJson(jsonStringify(jsonObject(
+        ["ok", "status", "checks"],
+        [jsonBoolean(healthy),
+         jsonString(if (healthy) "ready" else "unavailable"),
+         jsonObject(names, states)]
+    )), if (healthy) 200 else 503)
+}
+
+fun WebRouteGroup.health(
+    registry: WebHealthRegistry
+): WebRouteGroup {
+    val checks = registry
+    this.get("/live", { context: WebContext -> checks.live(context) })
+    this.get("/ready", { context: WebContext -> checks.ready(context) })
+    this
+}

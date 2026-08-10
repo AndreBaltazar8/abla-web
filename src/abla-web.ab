@@ -1,0 +1,7 @@
+// Public composition root for the Abla Web application framework.
+
+import "core.ab"
+import "health.ab"
+import "middleware.ab"
+import "observability.ab"
+import "rpc.ab"

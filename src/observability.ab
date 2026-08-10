@@ -1,0 +1,38 @@
+import "core.ab"
+
+class WebRequestMetric(
+    val method: string,
+    val path: string,
+    val status: int,
+    val requestId: string,
+    val principal: string
+)
+
+fun webRequestMetrics(
+    observe: (WebRequestMetric) -> void
+): WebMiddleware = webMiddleware(
+    "request-metrics",
+    { context: WebContext, next: WebNext ->
+        val response = next.run(context)
+        observe(WebRequestMetric(
+            context.request.method,
+            context.request.path,
+            response.status,
+            context.state("requestId"),
+            context.state("principal")
+        ))
+        response
+    }
+)
+
+fun webDeadline(
+    deadline: (HttpRequest) -> string
+): WebMiddleware = webMiddleware(
+    "deadline",
+    { context: WebContext, next: WebNext ->
+        val resolve = deadline
+        next.run(context.withState(
+            "deadlineMilliseconds", resolve(context.request)
+        ))
+    }
+)
