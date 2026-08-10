@@ -1,15 +1,121 @@
 import github("AndreBaltazar8/abla-postgres") as postgres
 import "../health.ab"
 
+class WebPostgresConfig(val inner: postgres.PgConfig)
+
+class WebPostgresParameter(val inner: postgres.PgParameter)
+
+class WebPostgresValue(val value: string, val isNull: bool)
+
+class WebPostgresResult(
+    val succeeded: bool,
+    val columns: array<string>,
+    val rows: array<array<WebPostgresValue>>,
+    val command: string,
+    val error: string
+) {
+    fun first(column: string): string {
+        var result = ""
+        var index = 0
+        while (index < this.columns.size) {
+            if (this.columns[index] == column && this.rows.size > 0 &&
+                index < this.rows[0].size && !this.rows[0][index].isNull) {
+                result = this.rows[0][index].value
+            }
+            index = index + 1
+        }
+        result
+    }
+
+    fun cell(row: int, column: string): WebPostgresValue {
+        var result = WebPostgresValue("", true)
+        var index = 0
+        while (index < this.columns.size) {
+            if (this.columns[index] == column && row >= 0 &&
+                row < this.rows.size && index < this.rows[row].size) {
+                result = this.rows[row][index]
+            }
+            index = index + 1
+        }
+        result
+    }
+}
+
+class WebPostgresSessionResult(
+    val descriptor: int,
+    val buffered: string,
+    val result: WebPostgresResult
+)
+
 class WebPostgresPool(
-    val config: postgres.PgConfig,
+    val config: WebPostgresConfig,
     val descriptors: array<int>,
     val buffers: array<string>,
     var next: int
 )
 
+fun webPostgresConfigFromEnvironment(): WebPostgresConfig =
+    WebPostgresConfig(postgres.pgConfigFromEnvironment())
+
+fun webPostgresText(value: string): WebPostgresParameter =
+    WebPostgresParameter(postgres.pgText(value))
+
+fun webPostgresNull(): WebPostgresParameter =
+    WebPostgresParameter(postgres.pgNull())
+
+fun webPostgresInt(value: string, fallback: int = 0): int =
+    postgres.pgInt(value, fallback)
+
+fun webPostgresResult(result: postgres.PgResult): WebPostgresResult {
+    val rows: array<array<WebPostgresValue>> = []
+    var row = 0
+    while (row < result.rows.size) {
+        val values: array<WebPostgresValue> = []
+        var column = 0
+        while (column < result.rows[row].size) {
+            values.append(WebPostgresValue(
+                result.rows[row][column].value,
+                result.rows[row][column].isNull
+            ))
+            column = column + 1
+        }
+        rows.append(values)
+        row = row + 1
+    }
+    WebPostgresResult(
+        result.succeeded,
+        result.columns,
+        rows,
+        result.command,
+        result.error
+    )
+}
+
+fun webPostgresSessionQuery(
+    config: WebPostgresConfig,
+    descriptor: int,
+    buffered: string,
+    sql: string,
+    parameters: array<WebPostgresParameter> = []
+): WebPostgresSessionResult {
+    val nativeParameters: array<postgres.PgParameter> = []
+    var index = 0
+    while (index < parameters.size) {
+        nativeParameters.append(parameters[index].inner)
+        index = index + 1
+    }
+    val session = postgres.pgSessionQuery(
+        config.inner, descriptor, buffered, sql, nativeParameters
+    )
+    WebPostgresSessionResult(
+        session.descriptor,
+        session.buffered,
+        webPostgresResult(session.result)
+    )
+}
+
 fun webPostgresPool(
-    config: postgres.PgConfig,
+    config: WebPostgresConfig,
     size: int = 4
 ): WebPostgresPool {
     val descriptors: array<int> = []
@@ -26,14 +132,17 @@ fun webPostgresPool(
     WebPostgresPool(config, descriptors, buffers, 0)
 }
 
+fun webPostgresPoolFromEnvironment(size: int = 4): WebPostgresPool =
+    webPostgresPool(webPostgresConfigFromEnvironment(), size)
+
 fun WebPostgresPool.query(
     sql: string,
-    parameters: array<postgres.PgParameter> = []
-): postgres.PgResult {
+    parameters: array<WebPostgresParameter> = []
+): WebPostgresResult {
     val slot = this.next
     this.next = this.next + 1
     if (this.next >= this.descriptors.size) this.next = 0
-    val session = postgres.pgSessionQuery(
+    val session = webPostgresSessionQuery(
         this.config,
         this.descriptors[slot],
         this.buffers[slot],

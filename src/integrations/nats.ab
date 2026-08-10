@@ -11,6 +11,10 @@ fun webNatsJobs(
     WebNatsJobs(move(client), prefix)
 }
 
+fun webNatsJobsFromEnvironment(
+    prefix: string = "jobs"
+): WebNatsJobs = webNatsJobs(nats.natsConfigFromEnvironment(), prefix)
+
 fun WebNatsJobs.publish(name: string, payload: string): bool {
     val result = this.client.publish("${this.prefix}.$name", payload)
     result.succeeded()

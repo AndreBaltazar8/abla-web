@@ -15,6 +15,9 @@ fun webRedisStore(config: redis.RedisConfig): WebRedisStore {
     WebRedisStore(move(client))
 }
 
+fun webRedisStoreFromEnvironment(): WebRedisStore =
+    webRedisStore(redis.redisConfigFromEnvironment())
+
 fun WebRedisStore.health(): WebHealthResult {
     val result = this.client.ping()
     if (result.succeeded()) webHealthy("connected")

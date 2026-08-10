@@ -47,8 +47,8 @@ backpressure, idle deadlines, and graceful draining.
 
 ## Service integrations
 
-The integration-test dependency lock pins the official Abla clients, and
-optional modules under `src/integrations/` expose small service-level adapters:
+The committed dependency locks pin the official Abla clients, and the package
+exposes small service-level adapters:
 
 - `WebPostgresPool` keeps a bounded round-robin set of authenticated wire
   sessions and runs idempotent migration statements;
@@ -73,11 +73,12 @@ make example
 To intentionally update dependencies, run:
 
 ```sh
+../ablac/build/ablac package update --project .
 ../ablac/build/ablac package update --project tests
 ```
 
-Ordinary integration builds consume the committed `tests/abla.lock`; they do
-not contact GitHub or silently advance dependencies. Applications importing an
-optional adapter pin its transitive client in the application's own lock.
+Ordinary builds consume committed locks; they do not contact GitHub or silently
+advance dependencies. Applications importing Abla Web also pin its transitive
+clients in the application's own lock.
 
 Licensed under the Mozilla Public License 2.0.
