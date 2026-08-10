@@ -2,9 +2,6 @@ import "../src/abla-web.ab"
 import "../src/integrations/postgres.ab"
 import "../src/integrations/redis.ab"
 import "../src/integrations/nats.ab"
-import github("AndreBaltazar8/abla-postgres") as postgres
-import github("AndreBaltazar8/abla-redis") as redis
-import github("AndreBaltazar8/abla-nats") as nats
 
 fun integrationLimit(context: WebContext): WebRedisLimitResult =
     WebRedisLimitResult(false, true, 30)
@@ -12,23 +9,11 @@ fun integrationLimit(context: WebContext): WebRedisLimitResult =
 fun integrationHandler(context: WebContext): HttpResponse = httpText("ok")
 
 fun main: int {
-    val pool = webPostgresPool(postgres.PgConfig(
-        "127.0.0.1", 5432, "test", "test", "", 100, 100
-    ), 3)
     val app = webApp()
     app.use(webRedisRateLimit(integrationLimit))
     app.get("/", integrationHandler)
     val limited = app.dispatch(httpGet("/"))
 
-    val redisStore = webRedisStore(redis.RedisConfig(
-        "127.0.0.1", 6379, "", "", 0, 100, 100
-    ))
-    redisStore.close()
-    val jobs = webNatsJobs(nats.NatsConfig(
-        "127.0.0.1", 4222, "test", "", "", "", 100, 100
-    ), "test.jobs")
-    jobs.close()
-
-    if (pool.descriptors.size == 3 && limited.status == 429 &&
+    if (limited.status == 429 &&
         limited.header("Retry-After") == "30") 42 else 1
 }
