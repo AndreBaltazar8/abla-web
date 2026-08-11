@@ -260,21 +260,32 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
     var index = 0
     while (index < this.routes.size && selected < 0) {
         val route = this.routes[index]
-        val matched = httpMatchPath(route.pattern, request.path)
-        if (matched.matched) {
+        if (route.pattern == request.path) {
             pathMatched = true
             val exact = route.method == request.method
             val headFallback = request.method == "HEAD" && route.method == "GET"
             if (exact || headFallback) {
                 selected = index
-                selectedMatch = matched
                 exactMethod = exact
+            }
+        } else {
+            val matched = httpMatchPath(route.pattern, request.path)
+            if (matched.matched) {
+                pathMatched = true
+                val exact = route.method == request.method
+                val headFallback = request.method == "HEAD" &&
+                    route.method == "GET"
+                if (exact || headFallback) {
+                    selected = index
+                    selectedMatch = matched
+                    exactMethod = exact
+                }
             }
         }
         index = index + 1
     }
     var routed = request
-    if (selected >= 0) {
+    if (selected >= 0 && selectedMatch.names.size > 0) {
         routed = HttpRequest(
             request.method,
             request.path,
@@ -286,30 +297,40 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
         )
     }
     val context = WebContext(routed, [], [])
-    val chain: array<WebMiddleware> = []
-    index = 0
-    while (index < this.middleware.size) {
-        chain.append(this.middleware[index])
-        index = index + 1
-    }
+    var direct = false
     if (selected >= 0) {
         val route = this.routes[selected]
+        direct = this.middleware.size == 0 && route.middleware.size == 0
+    }
+    val response = if (direct) {
+        val handler = this.routes[selected].handler
+        handler(context)
+    } else {
+        val chain: array<WebMiddleware> = []
         index = 0
-        while (index < route.middleware.size) {
-            chain.append(route.middleware[index])
+        while (index < this.middleware.size) {
+            chain.append(this.middleware[index])
             index = index + 1
         }
-    }
-    val terminal = { terminalContext: WebContext ->
-        if (selected < 0) {
-            if (pathMatched) httpText("method not allowed", 405)
-            else httpText("not found", 404)
-        } else {
-            val handler = this.routes[selected].handler
-            handler(terminalContext)
+        if (selected >= 0) {
+            val route = this.routes[selected]
+            index = 0
+            while (index < route.middleware.size) {
+                chain.append(route.middleware[index])
+                index = index + 1
+            }
         }
+        val terminal = { terminalContext: WebContext ->
+            if (selected < 0) {
+                if (pathMatched) httpText("method not allowed", 405)
+                else httpText("not found", 404)
+            } else {
+                val handler = this.routes[selected].handler
+                handler(terminalContext)
+            }
+        }
+        webInvokeMiddleware(chain, 0, context, terminal)
     }
-    val response = webInvokeMiddleware(chain, 0, context, terminal)
     if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
         HttpResponse(response.status, response.headers, "")
     } else response
