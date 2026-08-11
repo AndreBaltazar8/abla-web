@@ -38,6 +38,9 @@ fun account(context: WebContext): HttpResponse = httpText(
     "${context.parameter("id")}:${context.state("principal")}"
 )
 
+noescape fun fastAccount(context: WebContext): HttpResponse =
+    httpText(context.parameter("id"))
+
 fun sessionAccount(context: WebContext): HttpResponse = httpText(
     "${context.state("session")}:${context.state("principal")}"
 )
@@ -100,6 +103,22 @@ fun main: int {
         [HttpHeader("Cookie", "abla_session=session-good")]
     ))
     val ready = app.dispatch(httpGet("/health/ready"))
+    val noEscapeApp = webNoEscapeApp()
+    noEscapeApp.get("/fast/:id", fastAccount)
+    val fastAppResponse = noEscapeApp.dispatch(httpGet("/fast/19"))
+    val fast = webNoEscapeRoute(
+        httpGet("/fast/17"), "GET", "/fast/:id", fastAccount
+    )
+    val fastHead = webNoEscapeRoute(
+        httpRequest("HEAD", "/fast/17"),
+        "GET", "/fast/:id", fastAccount
+    )
+    val fastWrongMethod = webNoEscapeRoute(
+        httpPost("/fast/17", ""), "GET", "/fast/:id", fastAccount
+    )
+    val fastMissing = webNoEscapeRoute(
+        httpGet("/elsewhere"), "GET", "/fast/:id", fastAccount
+    )
 
     if (authorized.status == 200 && authorized.body == "42:user-7" &&
         authorized.header("X-Global") == "yes" &&
@@ -117,6 +136,10 @@ fun main: int {
         session.status == 200 &&
         session.body == "session-good:session-user" &&
         ready.status == 200 && ready.body != "" &&
+        fastAppResponse.status == 200 && fastAppResponse.body == "19" &&
+        fast.status == 200 && fast.body == "17" &&
+        fastHead.status == 200 && fastHead.body == "" &&
+        fastWrongMethod.status == 405 && fastMissing.status == 404 &&
         csrfRejected.status == 403 &&
         csrfRejected.header("X-Request-Id") == "request-16") 42 else 1
 }

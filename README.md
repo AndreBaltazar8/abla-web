@@ -45,6 +45,34 @@ backpressure policy into Abla Web.
 The generated server uses Abla's bounded event runtime, persistent HTTP,
 backpressure, idle deadlines, and graceful draining.
 
+## Region-backed hot path
+
+Services whose handlers do not retain request data can opt into a whole-request
+allocation region. The callable effect is checked by the compiler rather than
+trusted at runtime:
+
+```abla
+noescape fun plaintext(context: WebContext): HttpResponse =
+    httpText("hello, world!\n")
+
+noescape fun handle(request: HttpRequest): HttpResponse =
+    webNoEscapeRoute(request, "GET", "/plaintext", plaintext)
+
+fun main: int {
+    val server = httpEventServerNoEscapeHandler(
+        handle,
+        ipv4Any(8080)
+    )
+    server.run()
+}
+```
+
+`webNoEscapeRoute` supports exact routes, path parameters, method rejection,
+and GET-to-HEAD fallback. It intentionally excludes middleware and dynamic
+route mutation; use `WebApp` for those features. Parsing, routing, handler work,
+and response framing occur inside one bump region, with only the final encoded
+response promoted to the connection output queue.
+
 ## Service integrations
 
 The committed dependency locks pin the official Abla clients, and the package

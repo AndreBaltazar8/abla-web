@@ -76,6 +76,14 @@ class WebApp(
     val routes: array<WebRoute>
 )
 
+class WebNoEscapeRoute(
+    val method: string,
+    val pattern: string,
+    val handler: FnNoEscape(WebContext) -> HttpResponse
+)
+
+class WebNoEscapeApp(val routes: array<WebNoEscapeRoute>)
+
 class WebRouteGroup(
     val app: WebApp,
     val prefix: string,
@@ -83,6 +91,8 @@ class WebRouteGroup(
 )
 
 fun webApp(): WebApp = WebApp([], [])
+
+fun webNoEscapeApp(): WebNoEscapeApp = WebNoEscapeApp([])
 
 fun webMiddleware(
     name: string,
@@ -145,6 +155,27 @@ fun WebApp.route(
     this.routes.append(WebRoute(method, webJoinPath("", pattern), [], handler))
     this
 }
+
+fun WebNoEscapeApp.route(
+    method: string,
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebNoEscapeApp {
+    this.routes.append(WebNoEscapeRoute(
+        method, webJoinPath("", pattern), handler
+    ))
+    this
+}
+
+fun WebNoEscapeApp.get(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebNoEscapeApp = this.route("GET", pattern, handler)
+
+fun WebNoEscapeApp.post(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebNoEscapeApp = this.route("POST", pattern, handler)
 
 fun WebRouteGroup.route(
     method: string,
@@ -347,6 +378,110 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
 
 fun webDispatch(app: WebApp, request: HttpRequest): HttpResponse =
     app.dispatch(request)
+
+noescape fun WebNoEscapeApp.dispatch(request: HttpRequest): HttpResponse {
+    var selected = -1
+    var selectedMatch: HttpPathMatch? = null
+    var pathMatched = false
+    var exactMethod = false
+    var index = 0
+    while (index < this.routes.size && selected < 0) {
+        val route = this.routes[index]
+        if (route.pattern == request.path) {
+            pathMatched = true
+            val exact = route.method == request.method
+            val headFallback = request.method == "HEAD" &&
+                route.method == "GET"
+            if (exact || headFallback) {
+                selected = index
+                exactMethod = exact
+            }
+        } else {
+            val matched = httpMatchPath(route.pattern, request.path)
+            if (matched.matched) {
+                pathMatched = true
+                val exact = route.method == request.method
+                val headFallback = request.method == "HEAD" &&
+                    route.method == "GET"
+                if (exact || headFallback) {
+                    selected = index
+                    selectedMatch = matched
+                    exactMethod = exact
+                }
+            }
+        }
+        index = index + 1
+    }
+    var routed = request
+    val availableMatch = selectedMatch
+    if (selected >= 0 && availableMatch != null &&
+        availableMatch.names.size > 0) {
+        routed = HttpRequest(
+            request.method,
+            request.path,
+            request.query,
+            request.headers,
+            request.body,
+            availableMatch.names,
+            availableMatch.values
+        )
+    }
+    var response = if (selected < 0) {
+        if (pathMatched) httpText("method not allowed", 405)
+        else httpText("not found", 404)
+    } else {
+        val handler = this.routes[selected].handler
+        handler(WebContext(routed, null))
+    }
+    if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
+        response = HttpResponse(response.status, response.headers, "")
+    }
+    response
+}
+
+noescape fun webNoEscapeDispatch(
+    app: WebNoEscapeApp,
+    request: HttpRequest
+): HttpResponse = app.dispatch(request)
+
+noescape fun webNoEscapeRoute(
+    request: HttpRequest,
+    method: string,
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): HttpResponse {
+    var matched = pattern == request.path
+    var pathMatch: HttpPathMatch? = null
+    if (!matched) {
+        val candidate = httpMatchPath(pattern, request.path)
+        matched = candidate.matched
+        if (matched) pathMatch = candidate
+    }
+    val exactMethod = request.method == method
+    val headFallback = request.method == "HEAD" && method == "GET"
+    if (!matched) httpText("not found", 404)
+    else if (!exactMethod && !headFallback) {
+        httpText("method not allowed", 405)
+    } else {
+        var routed = request
+        val availableMatch = pathMatch
+        if (availableMatch != null && availableMatch.names.size > 0) {
+            routed = HttpRequest(
+                request.method,
+                request.path,
+                request.query,
+                request.headers,
+                request.body,
+                availableMatch.names,
+                availableMatch.values
+            )
+        }
+        val response = handler(WebContext(routed, null))
+        if (headFallback && !exactMethod) {
+            HttpResponse(response.status, response.headers, "")
+        } else response
+    }
+}
 
 fun webResponseHeader(
     response: HttpResponse,
