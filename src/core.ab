@@ -1,18 +1,22 @@
 import "abla/http"
 import "abla/json"
 
-class WebContext(
-    val request: HttpRequest,
-    val stateNames: array<string>,
-    val stateValues: array<string>
+class WebState(
+    val names: array<string>,
+    val values: array<string>
 )
+
+class WebContext(val request: HttpRequest, val state: WebState?)
 
 fun WebContext.state(name: string): string {
     var result = ""
     var index = 0
-    while (index < this.stateNames.size) {
-        if (this.stateNames[index] == name) result = this.stateValues[index]
-        index = index + 1
+    val state = this.state
+    if (state != null) {
+        while (index < state.names.size) {
+            if (state.names[index] == name) result = state.values[index]
+            index = index + 1
+        }
     }
     result
 }
@@ -22,22 +26,25 @@ fun WebContext.withState(name: string, value: string): WebContext {
     val values: array<string> = []
     var found = -1
     var index = 0
-    while (found < 0 && index < this.stateNames.size) {
-        if (this.stateNames[index] == name) found = index
-        index = index + 1
-    }
-    index = 0
-    while (index < this.stateNames.size) {
-        names.append(this.stateNames[index])
-        if (index == found) values.append(value)
-        else values.append(this.stateValues[index])
-        index = index + 1
+    val state = this.state
+    if (state != null) {
+        while (found < 0 && index < state.names.size) {
+            if (state.names[index] == name) found = index
+            index = index + 1
+        }
+        index = 0
+        while (index < state.names.size) {
+            names.append(state.names[index])
+            if (index == found) values.append(value)
+            else values.append(state.values[index])
+            index = index + 1
+        }
     }
     if (found < 0) {
         names.append(name)
         values.append(value)
     }
-    WebContext(this.request, names, values)
+    WebContext(this.request, WebState(names, values))
 }
 
 fun WebContext.parameter(name: string): string =
@@ -254,7 +261,7 @@ fun webInvokeMiddleware(
 
 fun WebApp.dispatch(request: HttpRequest): HttpResponse {
     var selected = -1
-    var selectedMatch = HttpPathMatch(false, [], [])
+    var selectedMatch: HttpPathMatch? = null
     var pathMatched = false
     var exactMethod = false
     var index = 0
@@ -285,18 +292,20 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
         index = index + 1
     }
     var routed = request
-    if (selected >= 0 && selectedMatch.names.size > 0) {
+    val availableMatch = selectedMatch
+    if (selected >= 0 && availableMatch != null &&
+        availableMatch.names.size > 0) {
         routed = HttpRequest(
             request.method,
             request.path,
             request.query,
             request.headers,
             request.body,
-            selectedMatch.names,
-            selectedMatch.values
+            availableMatch.names,
+            availableMatch.values
         )
     }
-    val context = WebContext(routed, [], [])
+    val context = WebContext(routed, null)
     var direct = false
     if (selected >= 0) {
         val route = this.routes[selected]
