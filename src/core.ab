@@ -190,10 +190,9 @@ class WebNoEscapeApp(val routes: array<WebNoEscapeRoute>)
 // callback slots carry the compiler-checked non-retention effect internally.
 // Ordinary functions and lambdas are inferred at construction call sites.
 class WebScopedNext(
-    val app: WebScopedApp,
+    val middleware: array<WebScopedMiddleware>,
     val index: int,
-    val selected: int,
-    val missingStatus: int
+    val terminal: FnNoEscape(WebContext) -> HttpResponse
 )
 
 class WebScopedMiddleware(
@@ -469,34 +468,19 @@ fun webInvokeMiddleware(
 
 noescape fun WebScopedNext.run(context: WebContext): HttpResponse =
     webInvokeScopedMiddleware(
-        this.app,
-        this.index,
-        this.selected,
-        this.missingStatus,
-        context
+        this.middleware, this.index, context, this.terminal
     )
 
 noescape fun webInvokeScopedMiddleware(
-    app: WebScopedApp,
+    middleware: array<WebScopedMiddleware>,
     index: int,
-    selected: int,
-    missingStatus: int,
-    context: WebContext
+    context: WebContext,
+    terminal: FnNoEscape(WebContext) -> HttpResponse
 ): HttpResponse {
-    if (index >= app.middleware.size) {
-        if (selected < 0) {
-            if (missingStatus == 405) httpText("method not allowed", 405)
-            else httpText("not found", 404)
-        } else {
-            val handler = app.routes[selected].handler
-            handler(context)
-        }
-    }
+    if (index >= middleware.size) terminal(context)
     else {
-        val current = app.middleware[index].handle
-        current(context, WebScopedNext(
-            app, index + 1, selected, missingStatus
-        ))
+        val current = middleware[index].handle
+        current(context, WebScopedNext(middleware, index + 1, terminal))
     }
 }
 
@@ -636,9 +620,17 @@ noescape fun WebScopedApp.dispatch(request: HttpRequest): HttpResponse {
             availableMatch.values
         )
     }
-    val missingStatus = if (pathMatched) 405 else 404
+    val terminal = { context: WebContext ->
+        if (selected < 0) {
+            if (pathMatched) httpText("method not allowed", 405)
+            else httpText("not found", 404)
+        } else {
+            val handler = this.routes[selected].handler
+            handler(context)
+        }
+    }
     var response = webInvokeScopedMiddleware(
-        this, 0, selected, missingStatus, WebContext(routed, null, null)
+        this.middleware, 0, WebContext(routed, null, null), terminal
     )
     if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
         response = HttpResponse(response.status, response.headers, "")
