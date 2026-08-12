@@ -133,6 +133,34 @@ fun webBearerAuth(
     }
 )
 
+fun webScopedBearerAuth(
+    authenticate: FnNoEscape(string) -> WebAuthResult
+): WebScopedMiddleware = webScopedMiddleware(
+    "bearer-auth",
+    { context: WebContext, next: WebScopedNext ->
+        val token = webBearerToken(context.header("Authorization"))
+        val resolve = authenticate
+        val result = resolve(token)
+        if (!result.accepted) {
+            webResponseHeader(
+                webError("unauthorized", result.detail, 401),
+                "WWW-Authenticate",
+                "Bearer"
+            )
+        } else {
+            var authenticated = context.withLocal(
+                "principal", result.principal
+            )
+            if (!result.user.isNull()) {
+                authenticated = authenticated.withJsonLocal(
+                    "user", result.user
+                )
+            }
+            next.run(authenticated)
+        }
+    }
+)
+
 fun webCookie(header: string, name: string): string {
     var result = ""
     var begin = 0

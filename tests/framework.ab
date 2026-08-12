@@ -58,8 +58,12 @@ fun requestLocals(context: WebContext, next: WebNext): HttpResponse {
     } else response
 }
 
-noescape fun fastAccount(context: WebContext): HttpResponse =
+fun fastAccount(context: WebContext): HttpResponse =
     httpText(context.parameter("id"))
+
+fun scopedAccount(context: WebContext): HttpResponse = httpText(
+    "${context.local("principal")}:${context.jsonLocal("user").getString("name")}"
+)
 
 fun sessionAccount(context: WebContext): HttpResponse = httpText(
     "${context.state("session")}:${context.state("principal")}"
@@ -140,6 +144,13 @@ fun main: int {
     val fastMissing = webNoEscapeRoute(
         httpGet("/elsewhere"), "GET", "/fast/:id", fastAccount
     )
+    val scopedApp = webScopedApp()
+    scopedApp.use(webScopedBearerAuth(acceptedToken))
+    scopedApp.get("/scoped", scopedAccount)
+    val scoped = scopedApp.dispatch(httpGet("/scoped", [
+        HttpHeader("Authorization", "Bearer good")
+    ]))
+    val scopedRejected = scopedApp.dispatch(httpGet("/scoped"))
 
     if (authorized.status == 200 &&
         authorized.body == "42:user-7:Andre:3:true" &&
@@ -162,6 +173,8 @@ fun main: int {
         fast.status == 200 && fast.body == "17" &&
         fastHead.status == 200 && fastHead.body == "" &&
         fastWrongMethod.status == 405 && fastMissing.status == 404 &&
+        scoped.status == 200 && scoped.body == "user-7:Andre" &&
+        scopedRejected.status == 401 &&
         csrfRejected.status == 403 &&
         csrfRejected.header("X-Request-Id") == "request-16") 42 else 1
 }

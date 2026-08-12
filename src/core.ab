@@ -186,6 +186,32 @@ class WebNoEscapeRoute(
 
 class WebNoEscapeApp(val routes: array<WebNoEscapeRoute>)
 
+// Request-scoped dispatch keeps the familiar app/middleware model while its
+// callback slots carry the compiler-checked non-retention effect internally.
+// Ordinary functions and lambdas are inferred at construction call sites.
+class WebScopedNext(
+    val middleware: array<WebScopedMiddleware>,
+    val index: int,
+    val terminal: FnNoEscape(WebContext) -> HttpResponse
+)
+
+class WebScopedMiddleware(
+    val name: string,
+    val handle: FnNoEscape(WebContext, WebScopedNext) -> HttpResponse
+)
+
+class WebScopedRoute(
+    val method: string,
+    val pattern: string,
+    val middleware: array<WebScopedMiddleware>,
+    val handler: FnNoEscape(WebContext) -> HttpResponse
+)
+
+class WebScopedApp(
+    val middleware: array<WebScopedMiddleware>,
+    val routes: array<WebScopedRoute>
+)
+
 class WebRouteGroup(
     val app: WebApp,
     val prefix: string,
@@ -195,6 +221,18 @@ class WebRouteGroup(
 fun webApp(): WebApp = WebApp([], [])
 
 fun webNoEscapeApp(): WebNoEscapeApp = WebNoEscapeApp([])
+
+fun webScopedApp(): WebScopedApp = WebScopedApp([], [])
+
+fun webScopedMiddleware(
+    name: string,
+    handler: FnNoEscape(WebContext, WebScopedNext) -> HttpResponse
+): WebScopedMiddleware = WebScopedMiddleware(name, handler)
+
+fun WebScopedApp.use(middleware: WebScopedMiddleware): WebScopedApp {
+    this.middleware.append(middleware)
+    this
+}
 
 fun webMiddleware(
     name: string,
@@ -278,6 +316,42 @@ fun WebNoEscapeApp.post(
     pattern: string,
     handler: FnNoEscape(WebContext) -> HttpResponse
 ): WebNoEscapeApp = this.route("POST", pattern, handler)
+
+fun WebScopedApp.route(
+    method: string,
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp {
+    this.routes.append(WebScopedRoute(
+        method, webJoinPath("", pattern), [], handler
+    ))
+    this
+}
+
+fun WebScopedApp.get(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp = this.route("GET", pattern, handler)
+
+fun WebScopedApp.post(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp = this.route("POST", pattern, handler)
+
+fun WebScopedApp.put(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp = this.route("PUT", pattern, handler)
+
+fun WebScopedApp.patch(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp = this.route("PATCH", pattern, handler)
+
+fun WebScopedApp.delete(
+    pattern: string,
+    handler: FnNoEscape(WebContext) -> HttpResponse
+): WebScopedApp = this.route("DELETE", pattern, handler)
 
 fun WebRouteGroup.route(
     method: string,
@@ -392,6 +466,24 @@ fun webInvokeMiddleware(
     }
 }
 
+noescape fun WebScopedNext.run(context: WebContext): HttpResponse =
+    webInvokeScopedMiddleware(
+        this.middleware, this.index, context, this.terminal
+    )
+
+noescape fun webInvokeScopedMiddleware(
+    middleware: array<WebScopedMiddleware>,
+    index: int,
+    context: WebContext,
+    terminal: FnNoEscape(WebContext) -> HttpResponse
+): HttpResponse {
+    if (index >= middleware.size) terminal(context)
+    else {
+        val current = middleware[index].handle
+        current(context, WebScopedNext(middleware, index + 1, terminal))
+    }
+}
+
 fun WebApp.dispatch(request: HttpRequest): HttpResponse {
     var selected = -1
     var selectedMatch: HttpPathMatch? = null
@@ -480,6 +572,76 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
 
 fun webDispatch(app: WebApp, request: HttpRequest): HttpResponse =
     app.dispatch(request)
+
+noescape fun WebScopedApp.dispatch(request: HttpRequest): HttpResponse {
+    var selected = -1
+    var selectedMatch: HttpPathMatch? = null
+    var pathMatched = false
+    var exactMethod = false
+    var index = 0
+    while (index < this.routes.size && selected < 0) {
+        val route = this.routes[index]
+        if (route.pattern == request.path) {
+            pathMatched = true
+            val exact = route.method == request.method
+            val headFallback = request.method == "HEAD" &&
+                route.method == "GET"
+            if (exact || headFallback) {
+                selected = index
+                exactMethod = exact
+            }
+        } else {
+            val matched = httpMatchPath(route.pattern, request.path)
+            if (matched.matched) {
+                pathMatched = true
+                val exact = route.method == request.method
+                val headFallback = request.method == "HEAD" &&
+                    route.method == "GET"
+                if (exact || headFallback) {
+                    selected = index
+                    selectedMatch = matched
+                    exactMethod = exact
+                }
+            }
+        }
+        index = index + 1
+    }
+    var routed = request
+    val availableMatch = selectedMatch
+    if (selected >= 0 && availableMatch != null &&
+        availableMatch.names.size > 0) {
+        routed = HttpRequest(
+            request.method,
+            request.path,
+            request.query,
+            request.headers,
+            request.body,
+            availableMatch.names,
+            availableMatch.values
+        )
+    }
+    val terminal = { context: WebContext ->
+        if (selected < 0) {
+            if (pathMatched) httpText("method not allowed", 405)
+            else httpText("not found", 404)
+        } else {
+            val handler = this.routes[selected].handler
+            handler(context)
+        }
+    }
+    var response = webInvokeScopedMiddleware(
+        this.middleware, 0, WebContext(routed, null, null), terminal
+    )
+    if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
+        response = HttpResponse(response.status, response.headers, "")
+    }
+    response
+}
+
+noescape fun webScopedDispatch(
+    app: WebScopedApp,
+    request: HttpRequest
+): HttpResponse = app.dispatch(request)
 
 noescape fun WebNoEscapeApp.dispatch(request: HttpRequest): HttpResponse {
     var selected = -1

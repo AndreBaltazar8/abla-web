@@ -79,14 +79,15 @@ backpressure, idle deadlines, and graceful draining.
 ## Region-backed hot path
 
 Services whose handlers do not retain request data can opt into a whole-request
-allocation region. The callable effect is checked by the compiler rather than
-trusted at runtime:
+allocation region. The compiler infers the callable effect from ordinary Abla
+functions and their transitive calls; application code does not need to repeat
+an annotation:
 
 ```abla
-noescape fun plaintext(context: WebContext): HttpResponse =
+fun plaintext(context: WebContext): HttpResponse =
     httpText("hello, world!\n")
 
-noescape fun handle(request: HttpRequest): HttpResponse =
+fun handle(request: HttpRequest): HttpResponse =
     webNoEscapeRoute(request, "GET", "/plaintext", plaintext)
 
 fun main: int {
@@ -99,8 +100,10 @@ fun main: int {
 ```
 
 `webNoEscapeRoute` supports exact routes, path parameters, method rejection,
-and GET-to-HEAD fallback. It intentionally excludes middleware and dynamic
-route mutation; use `WebApp` for those features. Parsing, routing, handler work,
+and GET-to-HEAD fallback. `WebScopedApp` adds compiler-checked request-scoped
+middleware and downstream typed locals without requiring application-level
+`noescape` annotations. Use the unrestricted `WebApp` when middleware must
+retain request data beyond the call. Parsing, routing, handler work,
 and response framing occur inside one bump region, with only the final encoded
 response promoted to the connection output queue.
 
