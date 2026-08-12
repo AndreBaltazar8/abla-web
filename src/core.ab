@@ -3,32 +3,43 @@ import "abla/json"
 
 class WebState(
     val names: array<string>,
-    val values: array<string>,
-    val stringLocals: array<WebStringLocal>,
-    val intLocals: array<WebIntLocal>,
-    val boolLocals: array<WebBoolLocal>,
-    val jsonLocals: array<WebJsonLocal>
+    val values: array<string>
 )
 
-class WebStringLocal(val name: string, val value: string)
-class WebIntLocal(val name: string, val value: int)
-class WebBoolLocal(val name: string, val value: bool)
-class WebJsonLocal(val name: string, val value: Json)
+// Locals form an immutable request-scoped stack. Adding a local is O(1),
+// preserves the caller's context, and makes the newest value visible only to
+// the context passed downstream. Kinds: 1 string, 2 int, 3 bool, 4 JSON.
+class WebLocalEntry(
+    val name: string,
+    val kind: int,
+    val stringValue: string,
+    val intValue: int,
+    val boolValue: bool,
+    val jsonValue: Json,
+    val previous: WebLocalEntry?
+)
 
-class WebContext(val request: HttpRequest, val state: WebState?)
+class WebContext(
+    val request: HttpRequest,
+    val state: WebState?,
+    val locals: WebLocalEntry? = null
+)
 
 fun WebContext.state(name: string): string {
     var result = ""
-    val state = this.state
-    var index = 0
-    if (state != null) {
-        index = state.stringLocals.size - 1
-        while (result == "" && index >= 0) {
-            val local = state.stringLocals[index]
-            if (local.name == name) result = local.value
-            index = index - 1
+    var local = this.locals
+    while (result == "" && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 1) {
+                result = available.stringValue
+            }
+            local = available.previous
         }
-        index = 0
+    }
+    var index = 0
+    val state = this.state
+    if (result == "" && state != null) {
         while (index < state.names.size) {
             if (state.names[index] == name) result = state.values[index]
             index = index + 1
@@ -39,30 +50,17 @@ fun WebContext.state(name: string): string {
 
 fun WebContext.hasLocal(name: string): bool {
     var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name) found = true
+            local = available.previous
+        }
+    }
     var index = 0
     val state = this.state
     if (!found && state != null) {
-        index = state.stringLocals.size - 1
-        while (!found && index >= 0) {
-            if (state.stringLocals[index].name == name) found = true
-            index = index - 1
-        }
-        index = state.intLocals.size - 1
-        while (!found && index >= 0) {
-            if (state.intLocals[index].name == name) found = true
-            index = index - 1
-        }
-        index = state.boolLocals.size - 1
-        while (!found && index >= 0) {
-            if (state.boolLocals[index].name == name) found = true
-            index = index - 1
-        }
-        index = state.jsonLocals.size - 1
-        while (!found && index >= 0) {
-            if (state.jsonLocals[index].name == name) found = true
-            index = index - 1
-        }
-        index = 0
         while (!found && index < state.names.size) {
             if (state.names[index] == name) found = true
             index = index + 1
@@ -76,129 +74,80 @@ fun WebContext.local(name: string): string = this.state(name)
 fun WebContext.withState(name: string, value: string): WebContext =
     this.withLocal(name, value)
 
-fun WebContext.withLocal(name: string, value: string): WebContext {
-    val locals: array<WebStringLocal> = []
-    val state = this.state
-    var index = 0
-    if (state != null) {
-        while (index < state.stringLocals.size) {
-            locals.append(state.stringLocals[index])
-            index = index + 1
-        }
-    }
-    locals.append(WebStringLocal(name, value))
-    if (state == null) WebContext(
-        this.request, WebState([], [], locals, [], [], [])
-    ) else WebContext(this.request, WebState(
-        state.names, state.values, locals, state.intLocals,
-        state.boolLocals, state.jsonLocals
-    ))
-}
+fun WebContext.withLocal(name: string, value: string): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 1, value, 0, false, jsonNull(), this.locals)
+)
 
 fun WebContext.intLocal(name: string, fallback: int = 0): int {
     var result = fallback
-    val state = this.state
-    if (state != null) {
-        var index = state.intLocals.size - 1
-        while (index >= 0) {
-            val local = state.intLocals[index]
-            if (local.name == name) {
-                result = local.value
-                index = -1
-            } else index = index - 1
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 2) {
+                result = available.intValue
+                found = true
+            }
+            local = available.previous
         }
     }
     result
 }
 
-fun WebContext.withIntLocal(name: string, value: int): WebContext {
-    val locals: array<WebIntLocal> = []
-    val state = this.state
-    var index = 0
-    if (state != null) {
-        while (index < state.intLocals.size) {
-            locals.append(state.intLocals[index])
-            index = index + 1
-        }
-    }
-    locals.append(WebIntLocal(name, value))
-    if (state == null) WebContext(
-        this.request, WebState([], [], [], locals, [], [])
-    ) else WebContext(this.request, WebState(
-        state.names, state.values, state.stringLocals, locals,
-        state.boolLocals, state.jsonLocals
-    ))
-}
+fun WebContext.withIntLocal(name: string, value: int): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 2, "", value, false, jsonNull(), this.locals)
+)
 
 fun WebContext.boolLocal(name: string, fallback: bool = false): bool {
     var result = fallback
-    val state = this.state
-    if (state != null) {
-        var index = state.boolLocals.size - 1
-        while (index >= 0) {
-            val local = state.boolLocals[index]
-            if (local.name == name) {
-                result = local.value
-                index = -1
-            } else index = index - 1
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 3) {
+                result = available.boolValue
+                found = true
+            }
+            local = available.previous
         }
     }
     result
 }
 
-fun WebContext.withBoolLocal(name: string, value: bool): WebContext {
-    val locals: array<WebBoolLocal> = []
-    val state = this.state
-    var index = 0
-    if (state != null) {
-        while (index < state.boolLocals.size) {
-            locals.append(state.boolLocals[index])
-            index = index + 1
-        }
-    }
-    locals.append(WebBoolLocal(name, value))
-    if (state == null) WebContext(
-        this.request, WebState([], [], [], [], locals, [])
-    ) else WebContext(this.request, WebState(
-        state.names, state.values, state.stringLocals, state.intLocals,
-        locals, state.jsonLocals
-    ))
-}
+fun WebContext.withBoolLocal(name: string, value: bool): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 3, "", 0, value, jsonNull(), this.locals)
+)
 
 fun WebContext.jsonLocal(name: string): Json {
     var result = jsonNull()
-    val state = this.state
-    if (state != null) {
-        var index = state.jsonLocals.size - 1
-        while (index >= 0) {
-            val local = state.jsonLocals[index]
-            if (local.name == name) {
-                result = local.value
-                index = -1
-            } else index = index - 1
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 4) {
+                result = available.jsonValue
+                found = true
+            }
+            local = available.previous
         }
     }
     result
 }
 
-fun WebContext.withJsonLocal(name: string, value: Json): WebContext {
-    val locals: array<WebJsonLocal> = []
-    val state = this.state
-    var index = 0
-    if (state != null) {
-        while (index < state.jsonLocals.size) {
-            locals.append(state.jsonLocals[index])
-            index = index + 1
-        }
-    }
-    locals.append(WebJsonLocal(name, value))
-    if (state == null) WebContext(
-        this.request, WebState([], [], [], [], [], locals)
-    ) else WebContext(this.request, WebState(
-        state.names, state.values, state.stringLocals, state.intLocals,
-        state.boolLocals, locals
-    ))
-}
+fun WebContext.withJsonLocal(name: string, value: Json): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 4, "", 0, false, value, this.locals)
+)
 
 fun WebContext.parameter(name: string): string =
     this.request.parameter(name)
@@ -489,7 +438,7 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
             availableMatch.values
         )
     }
-    val context = WebContext(routed, null)
+    val context = WebContext(routed, null, null)
     var direct = false
     if (selected >= 0) {
         val route = this.routes[selected]
@@ -584,7 +533,7 @@ noescape fun WebNoEscapeApp.dispatch(request: HttpRequest): HttpResponse {
         else httpText("not found", 404)
     } else {
         val handler = this.routes[selected].handler
-        handler(WebContext(routed, null))
+        handler(WebContext(routed, null, null))
     }
     if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
         response = HttpResponse(response.status, response.headers, "")
@@ -629,7 +578,7 @@ noescape fun webNoEscapeRoute(
                 availableMatch.values
             )
         }
-        val response = handler(WebContext(routed, null))
+        val response = handler(WebContext(routed, null, null))
         if (headFallback && !exactMethod) {
             HttpResponse(response.status, response.headers, "")
         } else response
