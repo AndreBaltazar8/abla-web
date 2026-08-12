@@ -11,7 +11,8 @@ class WebCorsOptions(
 class WebAuthResult(
     val accepted: bool,
     val principal: string,
-    val detail: string
+    val detail: string,
+    val user: Json = jsonNull()
 )
 
 class WebSessionResult(
@@ -121,7 +122,13 @@ fun webBearerAuth(
                 "Bearer"
             )
         } else {
-            next.run(context.withState("principal", result.principal))
+            var authenticated = context.withLocal(
+                "principal", result.principal
+            )
+            if (!result.user.isNull()) {
+                authenticated = authenticated.withJsonLocal("user", result.user)
+            }
+            next.run(authenticated)
         }
     }
 )

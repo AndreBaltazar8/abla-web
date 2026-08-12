@@ -6,13 +6,40 @@ class WebState(
     val values: array<string>
 )
 
-class WebContext(val request: HttpRequest, val state: WebState?)
+// Locals form an immutable request-scoped stack. Adding a local is O(1),
+// preserves the caller's context, and makes the newest value visible only to
+// the context passed downstream. Kinds: 1 string, 2 int, 3 bool, 4 JSON.
+class WebLocalEntry(
+    val name: string,
+    val kind: int,
+    val stringValue: string,
+    val intValue: int,
+    val boolValue: bool,
+    val jsonValue: Json,
+    val previous: WebLocalEntry?
+)
+
+class WebContext(
+    val request: HttpRequest,
+    val state: WebState?,
+    val locals: WebLocalEntry? = null
+)
 
 fun WebContext.state(name: string): string {
     var result = ""
+    var local = this.locals
+    while (result == "" && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 1) {
+                result = available.stringValue
+            }
+            local = available.previous
+        }
+    }
     var index = 0
     val state = this.state
-    if (state != null) {
+    if (result == "" && state != null) {
         while (index < state.names.size) {
             if (state.names[index] == name) result = state.values[index]
             index = index + 1
@@ -21,31 +48,106 @@ fun WebContext.state(name: string): string {
     result
 }
 
-fun WebContext.withState(name: string, value: string): WebContext {
-    val names: array<string> = []
-    val values: array<string> = []
-    var found = -1
+fun WebContext.hasLocal(name: string): bool {
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name) found = true
+            local = available.previous
+        }
+    }
     var index = 0
     val state = this.state
-    if (state != null) {
-        while (found < 0 && index < state.names.size) {
-            if (state.names[index] == name) found = index
-            index = index + 1
-        }
-        index = 0
-        while (index < state.names.size) {
-            names.append(state.names[index])
-            if (index == found) values.append(value)
-            else values.append(state.values[index])
+    if (!found && state != null) {
+        while (!found && index < state.names.size) {
+            if (state.names[index] == name) found = true
             index = index + 1
         }
     }
-    if (found < 0) {
-        names.append(name)
-        values.append(value)
-    }
-    WebContext(this.request, WebState(names, values))
+    found
 }
+
+fun WebContext.local(name: string): string = this.state(name)
+
+fun WebContext.withState(name: string, value: string): WebContext =
+    this.withLocal(name, value)
+
+fun WebContext.withLocal(name: string, value: string): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 1, value, 0, false, jsonNull(), this.locals)
+)
+
+fun WebContext.intLocal(name: string, fallback: int = 0): int {
+    var result = fallback
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 2) {
+                result = available.intValue
+                found = true
+            }
+            local = available.previous
+        }
+    }
+    result
+}
+
+fun WebContext.withIntLocal(name: string, value: int): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 2, "", value, false, jsonNull(), this.locals)
+)
+
+fun WebContext.boolLocal(name: string, fallback: bool = false): bool {
+    var result = fallback
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 3) {
+                result = available.boolValue
+                found = true
+            }
+            local = available.previous
+        }
+    }
+    result
+}
+
+fun WebContext.withBoolLocal(name: string, value: bool): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 3, "", 0, value, jsonNull(), this.locals)
+)
+
+fun WebContext.jsonLocal(name: string): Json {
+    var result = jsonNull()
+    var found = false
+    var local = this.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 4) {
+                result = available.jsonValue
+                found = true
+            }
+            local = available.previous
+        }
+    }
+    result
+}
+
+fun WebContext.withJsonLocal(name: string, value: Json): WebContext = WebContext(
+    this.request,
+    this.state,
+    WebLocalEntry(name, 4, "", 0, false, value, this.locals)
+)
 
 fun WebContext.parameter(name: string): string =
     this.request.parameter(name)
@@ -336,7 +438,7 @@ fun WebApp.dispatch(request: HttpRequest): HttpResponse {
             availableMatch.values
         )
     }
-    val context = WebContext(routed, null)
+    val context = WebContext(routed, null, null)
     var direct = false
     if (selected >= 0) {
         val route = this.routes[selected]
@@ -431,7 +533,7 @@ noescape fun WebNoEscapeApp.dispatch(request: HttpRequest): HttpResponse {
         else httpText("not found", 404)
     } else {
         val handler = this.routes[selected].handler
-        handler(WebContext(routed, null))
+        handler(WebContext(routed, null, null))
     }
     if (request.method == "HEAD" && selected >= 0 && !exactMethod) {
         response = HttpResponse(response.status, response.headers, "")
@@ -476,7 +578,7 @@ noescape fun webNoEscapeRoute(
                 availableMatch.values
             )
         }
-        val response = handler(WebContext(routed, null))
+        val response = handler(WebContext(routed, null, null))
         if (headFallback && !exactMethod) {
             HttpResponse(response.status, response.headers, "")
         } else response

@@ -9,7 +9,13 @@ fun traceGroup(context: WebContext, next: WebNext): HttpResponse {
 }
 
 fun acceptedToken(token: string): WebAuthResult = WebAuthResult(
-    token == "good", "user-7", "bad token"
+    token == "good",
+    "user-7",
+    "bad token",
+    jsonObject(
+        ["id", "name", "tier"],
+        [jsonString("user-7"), jsonString("Andre"), jsonString("gold")]
+    )
 )
 
 fun requestIdentity(request: HttpRequest): string =
@@ -34,9 +40,23 @@ fun observeMetric(metric: WebRequestMetric): void {
     return
 }
 
-fun account(context: WebContext): HttpResponse = httpText(
-    "${context.parameter("id")}:${context.state("principal")}"
-)
+fun account(context: WebContext): HttpResponse {
+    val id = context.parameter("id")
+    val principal = context.local("principal")
+    val name = context.jsonLocal("user").getString("name")
+    val attempts = context.intLocal("attempts")
+    val verified = context.boolLocal("verified")
+    httpText("$id:$principal:$name:$attempts:$verified")
+}
+
+fun requestLocals(context: WebContext, next: WebNext): HttpResponse {
+    val response = next.run(
+        context.withIntLocal("attempts", 3).withBoolLocal("verified", true)
+    )
+    if (context.hasLocal("attempts") || context.hasLocal("verified")) {
+        httpText("local leaked upstream", 500)
+    } else response
+}
 
 noescape fun fastAccount(context: WebContext): HttpResponse =
     httpText(context.parameter("id"))
@@ -57,6 +77,7 @@ fun main: int {
     app.use(webCors(webCorsOptions("https://mobile.example")))
     val api = app.group("/api/v1")
     api.use(webMiddleware("trace-group", traceGroup))
+    api.use(webMiddleware("request-locals", requestLocals))
     api.use(webBearerAuth(acceptedToken))
     api.get("/accounts/:id", account)
     api.put("/accounts/:id", account)
@@ -120,7 +141,8 @@ fun main: int {
         httpGet("/elsewhere"), "GET", "/fast/:id", fastAccount
     )
 
-    if (authorized.status == 200 && authorized.body == "42:user-7" &&
+    if (authorized.status == 200 &&
+        authorized.body == "42:user-7:Andre:3:true" &&
         authorized.header("X-Global") == "yes" &&
         authorized.header("X-Group") == "yes" &&
         authorized.header("X-Content-Type-Options") == "nosniff" &&
@@ -132,7 +154,7 @@ fun main: int {
         preflight.status == 204 &&
         preflight.header("Access-Control-Allow-Origin") ==
             "https://mobile.example" &&
-        updated.status == 200 && updated.body == "9:user-7" &&
+        updated.status == 200 && updated.body == "9:user-7:Andre:3:true" &&
         session.status == 200 &&
         session.body == "session-good:session-user" &&
         ready.status == 200 && ready.body != "" &&

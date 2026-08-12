@@ -42,6 +42,37 @@ checks, and compatible `/rpc/:method` routes for existing Abla Mobile clients.
 contract while moving routing, middleware, health checks, persistent HTTP, and
 backpressure policy into Abla Web.
 
+### Request locals
+
+Middleware can attach request-scoped data for every downstream middleware and
+handler. Each `with*Local` call returns an enriched context for `next`; the
+caller's context is unchanged and cannot observe locals created downstream.
+The no-escape fast router keeps its allocation-free context.
+
+```abla
+fun authenticate(token: string): WebAuthResult = WebAuthResult(
+    true,
+    "user-7",
+    "",
+    jsonObject(
+        ["id", "name"],
+        [jsonString("user-7"), jsonString("Andre")]
+    )
+)
+
+fun profile(context: WebContext): HttpResponse {
+    val user = context.jsonLocal("user")
+    webJson("{\"name\":\"${user.getString("name")}\"}")
+}
+```
+
+`withLocal`/`local`, `withIntLocal`/`intLocal`,
+`withBoolLocal`/`boolLocal`, and `withJsonLocal`/`jsonLocal` keep retrieval
+statically typed. `hasLocal` distinguishes a missing key from a valid empty,
+zero, false, or JSON-null value. `state` and `withState` remain compatibility
+aliases for string locals. `webBearerAuth` always stores `principal` and, when
+provided by `WebAuthResult`, stores the structured JSON `user` as well.
+
 The generated server uses Abla's bounded event runtime, persistent HTTP,
 backpressure, idle deadlines, and graceful draining.
 
