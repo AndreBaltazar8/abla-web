@@ -127,20 +127,17 @@ fun WebContext.withBoolLocal(name: string, value: bool): WebContext = WebContext
 )
 
 fun WebContext.jsonLocal(name: string): Json {
-    var result = jsonNull()
-    var found = false
     var local = this.locals
-    while (!found && local != null) {
+    while (local != null) {
         val available = local
         if (available != null) {
             if (available.name == name && available.kind == 4) {
-                result = available.jsonValue
-                found = true
+                return available.jsonValue
             }
             local = available.previous
         }
     }
-    result
+    jsonNull()
 }
 
 fun WebContext.withJsonLocal(name: string, value: Json): WebContext = WebContext(

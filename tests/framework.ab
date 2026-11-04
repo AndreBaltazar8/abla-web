@@ -71,7 +71,53 @@ fun sessionAccount(context: WebContext): HttpResponse = httpText(
 
 fun rpcEcho(payload: string): string = "{\"ok\":true,\"echo\":$payload}"
 
+// Differential reference for newest matching JSON kind, including a newer
+// entry of another kind with the same name and JSON null as a real value.
+private fun previousJsonLocal(context: WebContext, name: string): Json {
+    var result = jsonNull()
+    var found = false
+    var local = context.locals
+    while (!found && local != null) {
+        val available = local
+        if (available != null) {
+            if (available.name == name && available.kind == 4) {
+                result = available.jsonValue
+                found = true
+            }
+            local = available.previous
+        }
+    }
+    result
+}
+
+private fun jsonLocalChecks(): bool {
+    val names = ["", "user", "user-id", "β", "😀", "missing"]
+    var context = WebContext(httpGet("/"), null)
+    for (round in 0 until 32) {
+        val name = names[round % 5]
+        context = context.withJsonLocal(name,
+            if (round % 3 == 0) jsonNull() else jsonInteger(round))
+        val earlier = context
+        context = context.withLocal(name, "string")
+            .withIntLocal(name, round).withBoolLocal(name, true)
+        for (query in names) {
+            if (jsonStringify(context.jsonLocal(query)) !=
+                jsonStringify(previousJsonLocal(context, query))) return false
+        }
+        if (jsonStringify(context.jsonLocal(name)) !=
+            jsonStringify(earlier.jsonLocal(name))) return false
+    }
+    if (!context.jsonLocal("absent").isNull()) return false
+    val stateOnly = WebContext(httpGet("/"), WebState(["user"], ["state-only"]))
+    if (!stateOnly.jsonLocal("user").isNull() || !stateOnly.hasLocal("user")) return false
+    val empty = WebContext(httpGet("/"), null)
+    empty.jsonLocal("user").isNull() && !empty.hasLocal("user")
+}
+
+val jsonLocalsAtCompileTime = #jsonLocalChecks()
+
 fun main: int {
+    if (!jsonLocalsAtCompileTime || !jsonLocalChecks()) return 2
     val app = webApp()
     app.use(webMiddleware("trace-global", traceGlobal))
     app.use(webRequestIdentity(requestIdentity))
