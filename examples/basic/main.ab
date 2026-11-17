@@ -1,5 +1,10 @@
 import "../../src/abla-web.ab"
 import "abla/http/event"
+import "../../src/core.ab"
+import "../../src/middleware.ab"
+import "../../src/health.ab"
+import "abla/http"
+import "abla/sys/linux/net"
 
 fun hello(context: WebContext): HttpResponse = webJson(
     "{\"message\":\"hello ${context.parameter("name")}\"}"

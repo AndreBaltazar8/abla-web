@@ -1,6 +1,7 @@
 import github("AndreBaltazar8/abla-redis") as redis
 import "../middleware.ab"
 import "../health.ab"
+import "../core.ab"
 
 class WebRedisStore(val client: redis.RedisClient)
 

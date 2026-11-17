@@ -1,10 +1,10 @@
 // Public composition root for the Abla Web application framework.
 
-import "core.ab"
-import "health.ab"
-import "middleware.ab"
-import "observability.ab"
-import "rpc.ab"
-import "integrations/postgres.ab"
-import "integrations/redis.ab"
-import "integrations/nats.ab"
+export import "core.ab"
+export import "health.ab"
+export import "middleware.ab"
+export import "observability.ab"
+export import "rpc.ab"
+export import "integrations/postgres.ab"
+export import "integrations/redis.ab"
+export import "integrations/nats.ab"

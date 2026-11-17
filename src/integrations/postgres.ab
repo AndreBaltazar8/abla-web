@@ -105,11 +105,11 @@ fun webPostgresSessionQuery(
         index = index + 1
     }
     val session = postgres.pgSessionQuery(
-        config.inner, descriptor, buffered, sql, nativeParameters
+        config.inner, postgres.PgSessionState(descriptor, buffered), sql, nativeParameters
     )
     WebPostgresSessionResult(
-        session.descriptor,
-        session.buffered,
+        session.state.descriptor,
+        session.state.buffered,
         webPostgresResult(session.result)
     )
 }
