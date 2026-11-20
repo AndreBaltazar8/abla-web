@@ -1,7 +1,5 @@
 import "../src/abla-web.ab"
-import "../src/integrations/postgres.ab"
 import "../src/integrations/redis.ab"
-import "../src/integrations/nats.ab"
 import "../src/core.ab"
 import "abla/http"
 
